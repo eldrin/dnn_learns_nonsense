@@ -1,30 +1,34 @@
 #! /usr/local/bin/python3
-
+from __future__ import print_function
 import time
 
 import numpy as np
 import lasagne
 from lasagne import layers as L
 from lasagne.objectives import squared_error
-from lasagne.updates import sgd,apply_momentum
+from lasagne.updates import sgd,adagrad,adam,apply_momentum
+from lasagne.nonlinearities import rectify,identity
+from lasagne.regularization import regularize_layer_params, l2, l1
 
 import theano
 from theano import tensor as T
 
 floatX = theano.config.floatX
 
-N_SAMPLES = 1000000
-N_TRAIN = 900000
+N_SAMPLES = 100000
+N_TRAIN = 90000
 SZ_BATCH = 128
 
 N_DIM = 5
-N_HID = 10
-N_ITER = 100000
+N_HID = 5
+N_ITER = 1000
 
-LR = 0.0000001
+PATIENCE = 100
+
+LR = 0.01
 LR_SHARED = theano.shared(np.array(LR,dtype=floatX))
 LR_DECAY = 0.8
-LR_DECAY_RATE = 1000
+LR_DECAY_RATE = 5
 
 def model_function(a,b):
 	'''
@@ -42,7 +46,7 @@ def model_function(a,b):
 
 	ndim = a.shape[1]
 	Iv = np.fliplr(np.eye(ndim)) # get flipping matrix
-	w = np.array([1,10,100,1000,1000]) # weight matrix
+	w = np.array([10**i for i in range(ndim)]) # weight matrix
 
 	# model function
 	y = (a + b.dot(Iv)).dot(w)[:,None]
@@ -66,22 +70,21 @@ def create_dataset(n_samples,n_train,sz_input_vec=5):
 	return train_set,test_set
 
 
-def build_model(n_input,n_hidden):
+def build_model(n_input,n_hidden,optimizer=adagrad,l1_penalty_weight=1e-3):
 	'''
 	build NN model to estimating model function
 	'''
 	global LR
 
-
 	input_A = L.InputLayer((None,n_input),name='A')
-	layer_A = L.DenseLayer(input_A,n_hidden,b=None)
+	layer_A = L.DenseLayer(input_A,n_hidden,b=None,nonlinearity=identity)
 
 	input_B = L.InputLayer((None,n_input),name='B')
-	layer_B = L.DenseLayer(input_B,n_hidden,b=None)
+	layer_B = L.DenseLayer(input_B,n_hidden,b=None,nonlinearity=identity)
 
 	merge_layer = L.ElemwiseSumLayer((layer_A,layer_B))
 
-	output_layer = L.DenseLayer(merge_layer,1,b=None) # output is scalar
+	output_layer = L.DenseLayer(merge_layer,1,b=None,nonlinearity=identity) # output is scalar
 
 	x1 = T.matrix('x1')
 	x2 = T.matrix('x2')
@@ -91,13 +94,19 @@ def build_model(n_input,n_hidden):
 	params = L.get_all_params(output_layer)
 	loss = T.mean(squared_error(out,y))
 
-	updates_sgd = sgd(loss,params,learning_rate=LR)
-	updates = apply_momentum(updates_sgd,params,momentum=0.9)
+	# add l1 penalty
+	l1_penalty = regularize_layer_params([layer_A,layer_B,output_layer],l1)
+	loss = loss + l1_penalty*l1_penalty_weight
+
+	# updates_sgd = optimizer(loss,params,learning_rate=LR)
+	# updates = apply_momentum(updates_sgd,params,momentum=0.9)
+	updates = optimizer(loss,params,learning_rate=LR)
 
 	f_train = theano.function([x1,x2,y],loss,updates=updates)
-	f_test = theano.function([x1,x2],out)
+	f_test = theano.function([x1,x2,y],loss)
+	f_out = theano.function([x1,x2],out)
 
-	return f_train,f_test
+	return f_train,f_test,f_out,output_layer
 
 
 def fit_model(dataset,f_train,f_test,sz_batch=128,
@@ -116,11 +125,19 @@ def fit_model(dataset,f_train,f_test,sz_batch=128,
 
 	print('Start Training...')
 	
-	num_batches_train = int(A.shape[0]/sz_batch)
+	if A.shape[0]%sz_batch==0:
+		num_batches_train = int(A.shape[0]/sz_batch)
+	else:
+		num_batches_train = int(A.shape[0]/sz_batch)+1
+
+	if At.shape[0]%sz_batch==0:
+		num_batches_test = int(At.shape[0]/sz_batch)
+	else:
+		num_batches_test = int(At.shape[0]/sz_batch)+1
+
 	train_losses = []
-	train_accs = []
+	valid_losses = []
 	counter = 0
-	gs = []
 	try:
 		for epoch in range(n_iter):
 			epoch_st = time.time()
@@ -161,9 +178,27 @@ def fit_model(dataset,f_train,f_test,sz_batch=128,
 			train_loss = tloss / float(N)
 			train_losses.append(train_loss)
 
+			vloss = 0
+			Nt = 0
+			for batch in range(num_batches_test):
+
+				# get batch
+				slc = slice(sz_batch*batch,sz_batch*(batch+1))
+				Xt1_batch, Xt2_batch, yt_batch = At[slc],Bt[slc],yt[slc]
+
+				# number of batch rows
+				M = Xt1_batch.shape[0]
+				Nt += M
+
+				valid_res = f_test(Xt1_batch,Xt2_batch,yt_batch)
+				vloss += valid_res
+
+			valid_loss = vloss / float(Nt)
+			valid_losses.append(valid_loss)
+
 			epoch_end = time.time()
-			print("Epoch {}/{} - {:.1f}s - tloss: {:.4f}           ".format(\
-					epoch+1, n_iter, epoch_end-epoch_st , train_loss))
+			print("Epoch {}/{} - {:.1f}s - tloss: {:.4f} - vloss: {:.4f}      ".format(\
+					epoch+1, n_iter, epoch_end-epoch_st , train_loss, valid_loss))
 
 			if len(train_losses)>1:
 				if train_losses[-1] > train_losses[-2]:
@@ -176,9 +211,21 @@ def fit_model(dataset,f_train,f_test,sz_batch=128,
 	except KeyboardInterrupt:
 		print('Interrupted by user.')
 
+	return train_losses
+
+
+def get_weights(layers):
+	'''
+	extract weight from NN
+	'''
+	weights = L.get_all_param_values(layers)
+	return weights
+
 
 if __name__ == '__main__':
 
 	dset = create_dataset(N_SAMPLES, N_TRAIN, N_DIM)
-	f_train,f_test = build_model(N_DIM, N_HID)
-	fit_model(dset, f_train, f_test,sz_batch=SZ_BATCH,n_iter=N_ITER)
+	f_train,f_test,f_out,layers = build_model(N_DIM, N_HID)
+	loss_curve = fit_model(dset,f_train,f_test,sz_batch=SZ_BATCH,n_iter=N_ITER,patience=PATIENCE)
+
+	w = get_weights(layers)
