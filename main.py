@@ -1,3 +1,7 @@
+#! /usr/local/bin/python3
+
+import time
+
 import numpy as np
 import lasagne
 from lasagne import layers as L
@@ -5,16 +9,22 @@ from lasagne.objectives import squared_error
 from lasagne.updates import sgd,apply_momentum
 
 import theano
-from theano.config import floatX
 from theano import tensor as T
 
-N_SAMPLES = 1000
-N_TRAIN = 900
+floatX = theano.config.floatX
 
-LR = 0.001
+N_SAMPLES = 1000000
+N_TRAIN = 900000
+SZ_BATCH = 128
+
+N_DIM = 5
+N_HID = 10
+N_ITER = 100000
+
+LR = 0.0000001
 LR_SHARED = theano.shared(np.array(LR,dtype=floatX))
-LR_DECAY = 0.9
-LR_DECAY_RATE = 10
+LR_DECAY = 0.8
+LR_DECAY_RATE = 1000
 
 def model_function(a,b):
 	'''
@@ -26,16 +36,16 @@ def model_function(a,b):
 
 	'''
 	try:
-		assert len(b)==len(a)
+		assert b.shape[1]==a.shape[1]
 	except Exception as e:
 		print('Two inputs have different lengths!')
 
-	ndim = len(a)
+	ndim = a.shape[1]
 	Iv = np.fliplr(np.eye(ndim)) # get flipping matrix
 	w = np.array([1,10,100,1000,1000]) # weight matrix
 
 	# model function
-	y = (a + b.dot(Iv)).dot(w)
+	y = (a + b.dot(Iv)).dot(w)[:,None]
 
 	return y
 
@@ -75,7 +85,7 @@ def build_model(n_input,n_hidden):
 
 	x1 = T.matrix('x1')
 	x2 = T.matrix('x2')
-	y = T.vector('y')
+	y = T.matrix('y')
 
 	out = L.get_output(output_layer,{input_A:x1,input_B:x2})
 	params = L.get_all_params(output_layer)
@@ -106,7 +116,7 @@ def fit_model(dataset,f_train,f_test,sz_batch=128,
 
 	print('Start Training...')
 	
-	num_batches_train = int(A.shape[0]/sz_batch)+1
+	num_batches_train = int(A.shape[0]/sz_batch)
 	train_losses = []
 	train_accs = []
 	counter = 0
@@ -132,13 +142,13 @@ def fit_model(dataset,f_train,f_test,sz_batch=128,
 				
 				# get batch
 				slc = slice(sz_batch*batch,sz_batch*(batch+1))
-				X_batch, y_batch, _ = self.dbuilder.get_rows()
+				X1_batch, X2_batch, y_batch = A[slc],B[slc],y[slc]
 
 				# number of batch rows
-				M = X_batch.shape[0]
+				M = X1_batch.shape[0]
 				N += M
 
-				train_res = self._train(X_batch)
+				train_res = f_train(X1_batch,X2_batch,y_batch)
 				tloss += train_res
 
 				batch_end = time.time()
@@ -169,6 +179,6 @@ def fit_model(dataset,f_train,f_test,sz_batch=128,
 
 if __name__ == '__main__':
 
-	global N_SAMPLES,N_TRAIN
-	dset = create_dataset(N_SAMPLES, N_TRAIN)
-	
+	dset = create_dataset(N_SAMPLES, N_TRAIN, N_DIM)
+	f_train,f_test = build_model(N_DIM, N_HID)
+	fit_model(dset, f_train, f_test,sz_batch=SZ_BATCH,n_iter=N_ITER)
