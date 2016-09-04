@@ -74,14 +74,14 @@ def build_model(n_input,n_hidden):
 
 
 	input_A = L.InputLayer((None,n_input),name='A')
-	layer_A = L.DenseLayer(input_A,n_hidden)
+	layer_A = L.DenseLayer(input_A,n_hidden,b=None)
 
 	input_B = L.InputLayer((None,n_input),name='B')
-	layer_B = L.DenseLayer(input_B,n_hidden)
+	layer_B = L.DenseLayer(input_B,n_hidden,b=None)
 
 	merge_layer = L.ElemwiseSumLayer((layer_A,layer_B))
 
-	output_layer = L.DenseLayer(merge_layer,1) # output is scalar
+	output_layer = L.DenseLayer(merge_layer,1,b=None) # output is scalar
 
 	x1 = T.matrix('x1')
 	x2 = T.matrix('x2')
