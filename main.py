@@ -15,20 +15,22 @@ from theano import tensor as T
 
 floatX = theano.config.floatX
 
-N_SAMPLES = 100000
-N_TRAIN = 90000
-SZ_BATCH = 128
+N_SAMPLES = 10000
+N_TRAIN = 10
+SZ_BATCH = 5
 
 N_DIM = 5
 N_HID = 5
-N_ITER = 1000
+N_ITER = 5000
 
 PATIENCE = 100
 
-LR = 0.01
+OPTIMIZER = sgd
+
+LR = 0.0000001
 LR_SHARED = theano.shared(np.array(LR,dtype=floatX))
 LR_DECAY = 0.8
-LR_DECAY_RATE = 5
+LR_DECAY_RATE = 100
 
 def model_function(a,b):
 	'''
@@ -70,7 +72,8 @@ def create_dataset(n_samples,n_train,sz_input_vec=5):
 	return train_set,test_set
 
 
-def build_model(n_input,n_hidden,optimizer=adagrad,l1_penalty_weight=1e-3):
+def build_model(n_input,n_hidden,optimizer=adagrad,
+				l2_weight=1e-4,l1_weight=1e-2):
 	'''
 	build NN model to estimating model function
 	'''
@@ -96,11 +99,16 @@ def build_model(n_input,n_hidden,optimizer=adagrad,l1_penalty_weight=1e-3):
 
 	# add l1 penalty
 	l1_penalty = regularize_layer_params([layer_A,layer_B,output_layer],l1)
-	loss = loss + l1_penalty*l1_penalty_weight
 
-	# updates_sgd = optimizer(loss,params,learning_rate=LR)
-	# updates = apply_momentum(updates_sgd,params,momentum=0.9)
-	updates = optimizer(loss,params,learning_rate=LR)
+	# add l2 penalty
+	l2_penalty = regularize_layer_params([layer_A,layer_B,output_layer],l2)
+
+	# get loss + penalties
+	loss = loss + l1_penalty*l1_weight + l2_penalty*l2_weight
+
+	updates_sgd = optimizer(loss,params,learning_rate=LR)
+	updates = apply_momentum(updates_sgd,params,momentum=0.9)
+	# updates = optimizer(loss,params,learning_rate=LR)
 
 	f_train = theano.function([x1,x2,y],loss,updates=updates)
 	f_test = theano.function([x1,x2,y],loss)
@@ -225,7 +233,7 @@ def get_weights(layers):
 if __name__ == '__main__':
 
 	dset = create_dataset(N_SAMPLES, N_TRAIN, N_DIM)
-	f_train,f_test,f_out,layers = build_model(N_DIM, N_HID)
+	f_train,f_test,f_out,layers = build_model(N_DIM,N_HID,optimizer=OPTIMIZER)
 	loss_curve = fit_model(dset,f_train,f_test,sz_batch=SZ_BATCH,n_iter=N_ITER,patience=PATIENCE)
 
 	w = get_weights(layers)
